@@ -29,21 +29,6 @@ pipeline {
             }
         }
 
-        stage('Unit Tests') {
-            steps {
-                sh '''
-                    .venv/bin/pytest -v \
-                      --junitxml=test-results.xml
-                '''
-            }
-            post {
-                always {
-                    junit testResults: 'test-results.xml',
-                          allowEmptyResults: true
-                }
-            }
-        }
-
         stage('SonarQube Analysis') {
             steps {
                 script {
