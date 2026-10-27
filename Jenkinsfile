@@ -18,16 +18,23 @@ pipeline {
             }
         }
 
-        stage('Install Dependencies') {
-            steps {
-                sh '''
-                    python3 --version
-                    python3 -m venv .venv
-                    .venv/bin/pip install --upgrade pip
-                    .venv/bin/pip install -r requirements.txt
-                '''
-            }
-        }
+       stage('Install Dependencies') {
+    steps {
+        sh '''
+            set -e
+
+            python3 --version
+
+            rm -rf .venv
+
+            python3 -m venv .venv
+
+            .venv/bin/python -m pip install --upgrade pip
+
+            .venv/bin/python -m pip install -r requirements.txt
+        '''
+    }
+}
 
         stage('SonarQube Analysis') {
             steps {
