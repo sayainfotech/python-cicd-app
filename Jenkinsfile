@@ -8,11 +8,15 @@ pipeline {
     }
 
     environment {
-        APP_NAME = 'python-cicd-app'
-        K8S_NAMESPACE = 'default'
+        APP_NAME       = 'python-cicd-app'
+        DOCKERHUB_USER = 'abhisheksaya5'
+        K8S_NAMESPACE  = 'default'
+        MANIFEST_REPO  = 'https://github.com/sayainfotech/application-manifest.git'
+        MANIFEST_BRANCH = 'main'
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
@@ -23,10 +27,15 @@ pipeline {
             steps {
                 sh '''
                     set -eu
+
                     python3 --version
+
                     rm -rf .venv
+
                     python3 -m venv .venv
+
                     .venv/bin/python -m pip install --upgrade pip
+
                     .venv/bin/python -m pip install -r requirements.txt
                 '''
             }
@@ -36,14 +45,18 @@ pipeline {
             steps {
                 sh '''
                     set -eu
+
                     .venv/bin/python -m pytest -v \
                         --junitxml=test-results.xml
                 '''
             }
+
             post {
                 always {
-                    junit testResults: 'test-results.xml',
-                          allowEmptyResults: true
+                    junit(
+                        testResults: 'test-results.xml',
+                        allowEmptyResults: true
+                    )
                 }
             }
         }
@@ -57,10 +70,9 @@ pipeline {
                         sh """
                             set -eu
 
-                            echo "Checking SonarQube configuration..."
                             test -f "\$WORKSPACE/sonar-project.properties"
 
-                            ${scannerHome}/bin/sonar-scanner \
+                            "${scannerHome}/bin/sonar-scanner" \
                                 -Dproject.settings="\$WORKSPACE/sonar-project.properties"
                         """
                     }
@@ -82,12 +94,15 @@ pipeline {
 
                         IMAGE="$DOCKER_USER/$APP_NAME:$BUILD_NUMBER"
 
+                        echo "Building image: $IMAGE"
+
                         echo "$DOCKER_PASSWORD" |
                             docker login \
                                 --username "$DOCKER_USER" \
                                 --password-stdin
 
                         docker build -t "$IMAGE" .
+
                         docker push "$IMAGE"
 
                         docker logout
@@ -96,49 +111,63 @@ pipeline {
             }
         }
 
-        stage('Deploy to Kubernetes') {
+        stage('Update GitOps Manifest') {
             steps {
                 dir('manifests') {
-                    git branch: 'main',
-                        url: 'https://github.com/sayainfotech/application-manifest.git'
+                    git(
+                        branch: "${MANIFEST_BRANCH}",
+                        url: "${MANIFEST_REPO}"
+                    )
 
                     withCredentials([
                         usernamePassword(
-                            credentialsId: 'dockerhub-creds',
-                            usernameVariable: 'DOCKER_USER',
-                            passwordVariable: 'DOCKER_PASSWORD'
+                            credentialsId: 'github-manifest-write',
+                            usernameVariable: 'GITHUB_USER',
+                            passwordVariable: 'GITHUB_TOKEN'
                         )
                     ]) {
                         sh '''
                             set -eu
 
-                            IMAGE="$DOCKER_USER/$APP_NAME:$BUILD_NUMBER"
+                            IMAGE="$DOCKERHUB_USER/$APP_NAME:$BUILD_NUMBER"
 
-                            echo "Checking manifest files..."
+                            echo "Updating GitOps image to: $IMAGE"
+
                             test -f deployment.yaml
-                            test -f service.yaml
 
-                            echo "Updating image to: $IMAGE"
-                            sed "s|IMAGE_PLACEHOLDER|$IMAGE|g" \
-                                deployment.yaml > deployment-rendered.yaml
+                            # Update the image field in deployment.yaml.
+                            # This assumes the manifest has one container
+                            # image line that should be replaced.
+                            sed -i \
+                                '/^[[:space:]]*image:/s|image:.*|image: '"$IMAGE"'|' \
+                                deployment.yaml
 
-                            echo "Applying Kubernetes deployment..."
-                            kubectl apply -n "$K8S_NAMESPACE" \
-                                -f deployment-rendered.yaml
+                            echo "Checking the updated image:"
+                            grep -n 'image:' deployment.yaml
 
-                            echo "Applying Kubernetes service..."
-                            kubectl apply -n "$K8S_NAMESPACE" \
-                                -f service.yaml
+                            git config user.name "Jenkins CI"
+                            git config user.email "jenkins@example.com"
 
-                            echo "Waiting for rollout..."
-                            kubectl rollout status \
-                                deployment/python-cicd-app \
-                                -n "$K8S_NAMESPACE" \
-                                --timeout=180s
+                            git add deployment.yaml
 
-                            kubectl get deployments -n "$K8S_NAMESPACE"
-                            kubectl get pods -n "$K8S_NAMESPACE"
-                            kubectl get svc -n "$K8S_NAMESPACE"
+                            if git diff --cached --quiet; then
+                                echo "No manifest changes detected."
+                                exit 1
+                            fi
+
+                            git commit -m \
+                                "Update python-cicd-app image to ${BUILD_NUMBER}"
+
+                            # Authenticate only for this Git push.
+                            AUTH=$(printf '%s:%s' \
+                                "$GITHUB_USER" "$GITHUB_TOKEN" |
+                                base64 -w 0)
+
+                            git \
+                                -c http.extraheader="AUTHORIZATION: basic $AUTH" \
+                                push origin HEAD:main
+
+                            unset AUTH GITHUB_TOKEN
                         '''
                     }
                 }
@@ -148,11 +177,21 @@ pipeline {
 
     post {
         success {
-            echo 'CI/CD pipeline completed successfully!'
+            echo '''
+            CI pipeline completed successfully!
+
+            Docker image pushed to Docker Hub.
+            GitOps manifest updated in GitHub.
+            Argo CD should now detect the Git change and synchronize
+            the application to Minikube, provided automated sync is enabled.
+            '''
         }
 
         failure {
-            echo 'Pipeline failed. Check the stage logs.'
+            echo '''
+            Pipeline failed.
+            Open Console Output and inspect the first failed stage.
+            '''
         }
 
         always {
