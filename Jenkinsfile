@@ -36,19 +36,31 @@ pipeline {
     }
 }
 
-        stage('SonarQube Analysis') {
-            steps {
-                script {
-                    def scannerHome = tool 'SonarScanner'
+        
+stage('SonarQube Analysis') {
+    steps {
+        script {
+            def scannerHome = tool 'SonarScanner'
 
-                    withSonarQubeEnv('SonarQube') {
-                        sh """
-                            ${scannerHome}/bin/sonar-scanner
-                        """
-                    }
-                }
+            withSonarQubeEnv('SonarQube') {
+                sh """
+                    set -eu
+
+                    echo "Current workspace:"
+                    pwd
+
+                    echo "Checking SonarQube configuration..."
+                    test -f "\$WORKSPACE/sonar-project.properties"
+
+                    echo "Starting SonarQube analysis..."
+                    ${scannerHome}/bin/sonar-scanner \
+                        -Dproject.settings="\$WORKSPACE/sonar-project.properties"
+                """
             }
         }
+    }
+}
+
 
         stage('Build and Push Docker Image') {
             steps {
