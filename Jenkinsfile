@@ -90,44 +90,47 @@ stage('SonarQube Analysis') {
             }
         }
 
-        stage('Deploy to Kubernetes') {
-            steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'dockerhub-creds',
-                        usernameVariable: 'DOCKER_USER',
-                        passwordVariable: 'DOCKER_PASSWORD'
-                    )
-                ]) {
-                    sh '''
-                        set -eu
+       
+stage('Deploy to Kubernetes') {
+    steps {
+        dir('manifests') {
+            git branch: 'main',
+                url: 'https://github.com/sayainfotech/application-manifest.git'
 
-                        IMAGE="$DOCKER_USER/$APP_NAME:$BUILD_NUMBER"
+            sh '''
+                set -eu
 
-                        sed "s|IMAGE_PLACEHOLDER|$IMAGE|g" \
-                            k8s/deployment.yaml \
-                            > k8s/deployment-rendered.yaml
+                IMAGE="$DOCKER_USER/python-cicd-app:$BUILD_NUMBER"
 
-                        kubectl apply -n "$K8S_NAMESPACE" \
-                            -f k8s/deployment-rendered.yaml
+                echo "Checking manifest files..."
+                test -f deployment.yaml
+                test -f service.yaml
 
-                        kubectl apply -n "$K8S_NAMESPACE" \
-                            -f k8s/service.yaml
+                echo "Updating image to: $IMAGE"
+                sed "s|IMAGE_PLACEHOLDER|$IMAGE|g" \
+                    deployment.yaml > deployment-rendered.yaml
 
-                        kubectl rollout status \
-                            deployment/python-cicd-app \
-                            -n "$K8S_NAMESPACE" \
-                            --timeout=180s
+                echo "Applying deployment..."
+                kubectl apply -n "$K8S_NAMESPACE" \
+                    -f deployment-rendered.yaml
 
-                        kubectl get pods -n "$K8S_NAMESPACE"
-                        kubectl get svc -n "$K8S_NAMESPACE"
+                echo "Applying service..."
+                kubectl apply -n "$K8S_NAMESPACE" \
+                    -f service.yaml
 
-                        rm -f k8s/deployment-rendered.yaml
-                    '''
-                }
-            }
+                echo "Waiting for rollout..."
+                kubectl rollout status \
+                    deployment/python-cicd-app \
+                    -n "$K8S_NAMESPACE" \
+                    --timeout=180s
+
+                kubectl get deployments -n "$K8S_NAMESPACE"
+                kubectl get pods -n "$K8S_NAMESPACE"
+                kubectl get svc -n "$K8S_NAMESPACE"
+            '''
         }
     }
+}
 
     post {
         success {
